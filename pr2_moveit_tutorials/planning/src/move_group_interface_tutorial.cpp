@@ -36,8 +36,12 @@
 *********************************************************************/
 
 #include <ros/ros.h>
+#include <ros/time.h>
+#include <ros/duration.h>
 
 #include <moveit/move_group_interface/move_group.h>
+
+#include <eigen_conversions/eigen_msg.h>
 
 #include <sys/select.h>
 #include <sys/time.h>
@@ -59,10 +63,75 @@
 #include <moveit/robot_state/conversions.h>
 #endif
 
+struct TutorialState {
+  move_group_interface::MoveGroup *right_arm;
+  ros::Time last_status;
+  geometry_msgs::PoseStamped current_pose;
+  Eigen::Vector3d current_position;
+  Eigen::Quaterniond current_orientation;
+} g_state;
+
 void help()
 {
-  printf("Press keys...\n");
+  printf("===== Key commands =====\n");
+  printf("  i,k - move goal position away/towards robot.\n");
+  printf("  j,l - move goal position left/right.\n");
+  printf("  u,h - move goal position up/down.\n");
+  printf("  g   - go to goal position.\n");
+  printf("  ?       - print this help ('/' works too)\n");
+  printf("========================\n");
   fflush(stdout);
+}
+
+void handleKey(int key)
+{
+  if (key < ' ' || key > '~')
+    return;
+  printf("got key=%02x='%c'\n", key, key);
+
+  switch(key)
+  {
+    case '?':
+    case '/':
+      help();
+      break;
+  }
+}
+
+void showStatus()
+{
+  geometry_msgs::PoseStamped pose = g_state.right_arm->getCurrentPose();
+
+  Eigen::Vector3d position;
+  Eigen::Quaterniond orientation;
+  tf::pointMsgToEigen(pose.pose.position, position);
+  tf::quaternionMsgToEigen(pose.pose.orientation, orientation);
+  
+
+
+  if (g_state.last_status.sec == 0 ||
+      ((position - g_state.current_position).squaredNorm() > 0.0001) ||
+      !orientation.isApprox(g_state.current_orientation) ||
+      (ros::Time::now() - g_state.last_status) > ros::Duration(20, 0))
+  {
+    g_state.last_status = ros::Time::now();
+    
+    printf("\n");
+    printf("============Status!!=============\n");
+    printf("Current pose: (%7.2f, %7.2f, %7.2f)  (%7.2f, %7.2f, %7.2f, %7.2f)\n",
+      position.x(),
+      position.y(),
+      position.z(),
+      orientation.x(),
+      orientation.y(),
+      orientation.z(),
+      orientation.w());
+    printf("(press '?' for help)\n");
+    fflush(stdout);
+
+    g_state.current_position = position;
+    g_state.current_orientation = orientation;
+  }
 }
 
 // return key, or -1 on timeout
@@ -103,7 +172,10 @@ void keyboardLoop()
   while(ros::ok())
   {
     int k = getKey(fd_stdin, 1.0);
-    printf("got key=%02x='%c'\n", k<0?0xff:k, k>=' ' && k<='~' ? k : '?');
+    if (k < 0)
+      showStatus();
+    else
+      handleKey(k);
   }
 
   tcsetattr(fd_stdin, TCSANOW, &orig);
@@ -116,8 +188,12 @@ int main(int argc, char **argv)
   spinner.start();
   ros::NodeHandle node_handle;  
 
-  move_group_interface::MoveGroup group("right_arm");
-  group.setPlanningTime(45.0);
+  move_group_interface::MoveGroup right_arm("right_arm");
+  right_arm.setPlanningTime(45.0);
+
+
+  g_state.right_arm = &right_arm;
+  g_state.last_status = ros::Time();
 
   keyboardLoop();
 
